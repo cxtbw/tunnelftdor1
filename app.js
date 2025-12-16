@@ -262,32 +262,49 @@ async function recordAccountTransaction(userId, type) {
   });
 }
 
-function executeScript(scriptType, username) {
+function executeScript(scriptType, username, serverId) {
     return new Promise((resolve) => {
-        const scriptName = `trial${scriptType}.sh`;
-        const fullPath = `./scripts/${scriptName}`;
-        const command = `bash ${fullPath}`;
-        logger.info(`Executing script: ${command}`);
-        exec(command, (error, stdout, stderr) => {
-            if (error) {
-                logger.error(`Script execution error for ${scriptName}: ${error.message}, Stderr: ${stderr}`);
-                return resolve(`❌ GAGAL! Terjadi kesalahan pada sistem saat membuat akun trial. (Cek log server, error: ${error.message.substring(0, 100)})`);
+        db.get('SELECT domain, auth FROM Server WHERE id = ?', [serverId], (err, server) => {
+            if (err || !server) {
+                logger.error(`Failed to get server details for ID ${serverId}: ${err ? err.message : 'Not found'}`);
+                return resolve(`❌ GAGAL! Server ID ${serverId} tidak ditemukan atau terjadi kesalahan database.`);
             }
-            if (stderr) {
-                logger.warn(`Script stderr for ${scriptName}: ${stderr}`);
-            }
+
+            const scriptName = `trial${scriptType}.sh`;
+            const fullPath = `./scripts/${scriptName}`;
             
-            // Asumsi stdout berisi JSON atau pesan sukses dari skrip
-            let msg = stdout.trim();
+            // Mengirim username, domain, dan auth ke skrip shell
+            const command = `bash ${fullPath} "${username}" "${server.domain}" "${server.auth}"`;
             
-            // Coba parse JSON jika skrip Anda menghasilkan JSON (seperti Vless/Vmess)
-            try {
-                const data = JSON.parse(msg);
+            logger.info(`Executing script: ${command}`);
+            exec(command, (error, stdout, stderr) => {
+                if (error) {
+                    logger.error(`Script execution error for ${scriptName}: ${error.message}, Stderr: ${stderr}`);
+                    return resolve(`❌ GAGAL! Terjadi kesalahan pada sistem saat membuat akun trial. (Cek log server, error: ${error.message.substring(0, 100)})`);
+                }
+                if (stderr) {
+                    logger.warn(`Script stderr for ${scriptName}: ${stderr}`);
+                }
                 
-                // Format output pesan yang indah berdasarkan data JSON
-                if (data.status === 'success') {
-                    // Membuat pesan yang lebih rapi dari JSON (Contoh VLESS/VMESS)
-                    let formattedMsg = `
+                let msg = stdout.trim();
+                
+                try {
+                    const data = JSON.parse(msg);
+                    
+                    if (data.status !== 'success') {
+                        return resolve(`❌ GAGAL! Skrip Trial mengembalikan status gagal: ${data.message || 'Unknown error'}`);
+                    }
+                    
+                    let formattedMsg = '';
+
+
+if (data.protocol === 'ssh') {
+    let portsData = data.ports;
+    if (typeof portsData === 'string') {
+        try { portsData = JSON.parse(portsData); } catch (e) { portsData = {}; }
+    }
+    
+    formattedMsg = `
 🔰 *AKUN SSH TRIAL (1 Jam)*
 
 👤 \`User:\` \`${data.username}\`
